@@ -112,6 +112,18 @@ test('adds a backlink once', () => {
   assert.equal(s.withBacklink(linked, opts), null);
 });
 
+test('points an old backlink at the current summary', () => {
+  const linked = s.withBacklink('plan', { backlinkMarker: mark.backlink, title: 'T', url: 'https://x/old' });
+  const moved = s.withBacklink(linked, { backlinkMarker: mark.backlink, title: 'T', url: 'https://x/new' });
+  assert.equal(moved, 'plan\n\n---\n<!-- tf-plan-backlink -->\n[↩ Back to T](https://x/new)');
+});
+
+test('replaces a backlink that puts the marker before the rule', () => {
+  const old = 'plan\n<!-- tf-plan-backlink -->\n\n---\n[↩ Back to Plan Summary](https://x/old)';
+  const moved = s.withBacklink(old, { backlinkMarker: mark.backlink, title: 'T', url: 'https://x/new' });
+  assert.equal(moved, 'plan\n\n---\n<!-- tf-plan-backlink -->\n[↩ Back to T](https://x/new)');
+});
+
 test('a custom prefix changes every marker', () => {
   const m = s.markers('infra.plan');
   assert.equal(m.summary, '<!-- infra.plan-summary -->');
@@ -269,6 +281,29 @@ test('comment mode keeps the backlink that the summary added', async () => {
   assert.match(dev.body, /1 to change/);
   assert.equal(dev.body.split(mark.backlink).length, 2);
   assert.match(dev.body, /\[↩ Back to Terraform plan summary\]/);
+});
+
+test('summary mode repairs backlinks after the summary comment is posted again', async () => {
+  const dev = { id: 1, body: planComment('dev', 'No changes.'), html_url: 'u1' };
+  const comments = [dev];
+  const { github } = fakeGithub(comments);
+  await s.main({ github, context, core, inputs: {} });
+  const first = comments.find((c) => c.body.includes(mark.summary));
+  comments.splice(comments.indexOf(first), 1);
+  await s.main({ github, context, core, inputs: {} });
+  const second = comments.find((c) => c.body.includes(mark.summary));
+  assert.notEqual(second.html_url, first.html_url);
+  assert.ok(dev.body.endsWith(`(${second.html_url})`));
+  assert.equal(dev.body.split(mark.backlink).length, 2);
+});
+
+test('comment mode uses the heading input on one line', async () => {
+  const comments = [];
+  const { github } = fakeGithub(comments);
+  const inputs = { mode: 'comment', name: 'devops', heading: 'Terraform Plan - Devops EKS\n🏗️', planFile: planFile('No changes.') };
+  await s.main({ github, context, core, inputs });
+  assert.ok(comments[0].body.includes('\n### Terraform Plan - Devops EKS 🏗️\n'));
+  assert.equal(s.parsePlan(comments[0].body, mark.plan).name, 'devops');
 });
 
 test('comment mode checks its inputs before any API call', async () => {

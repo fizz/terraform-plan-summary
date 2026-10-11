@@ -139,24 +139,37 @@ function renderPending(existingBody, { title, summaryMarker }) {
   return cleared.replace(heading, `${heading}\n\n${PENDING_STALE}`);
 }
 
-function withBacklink(body, { backlinkMarker, title, url }) {
-  if (body.includes(backlinkMarker)) return null;
-  return `${body}\n\n---\n${backlinkMarker}\n[↩ Back to ${title}](${url})`;
+// Where the backlink block starts, or -1. withBacklink writes the rule before the
+// marker. Older comments put the marker first, then the rule and the link.
+function backlinkStart(body, backlinkMarker) {
+  const block = body.indexOf(`\n\n---\n${backlinkMarker}`);
+  if (block !== -1) return block;
+  return body.indexOf(`\n${backlinkMarker}`);
 }
 
-// The backlink block that withBacklink appended, or '' when there is none.
+// Adds the link, or points an old link at the current summary. The summary
+// comment can be deleted and posted again, and a link to the old one goes nowhere.
+// Returns null when the comment already has this link.
+function withBacklink(body, { backlinkMarker, title, url }) {
+  const at = backlinkStart(body, backlinkMarker);
+  const plan = at === -1 ? body : body.slice(0, at);
+  const linked = `${plan}\n\n---\n${backlinkMarker}\n[↩ Back to ${title}](${url})`;
+  return linked === body ? null : linked;
+}
+
+// The backlink block at the end of a comment, or '' when there is none.
 function backlinkOf(body, backlinkMarker) {
-  const at = body.indexOf(`\n\n---\n${backlinkMarker}`);
+  const at = backlinkStart(body, backlinkMarker);
   return at === -1 ? '' : body.slice(at);
 }
 
 // A comment holds 65,536 characters. A long plan keeps its end, where the Plan:
 // line and any errors are, and says at the top that the start is missing.
-function renderPlanComment(plan, { name, prefix, maxChars }) {
+function renderPlanComment(plan, { name, prefix, maxChars, heading }) {
   const text = plan.length > maxChars ? `... (start of the plan truncated) ...\n\n${plan.slice(-maxChars)}` : plan;
   let fence = '```';
   while (text.includes(fence)) fence += '`';
-  return [`<!-- ${prefix}: ${name} -->`, `### Terraform plan: \`${name}\``, '', `${fence}terraform`, text, fence].join('\n');
+  return [`<!-- ${prefix}: ${name} -->`, `### ${heading || `Terraform plan: \`${name}\``}`, '', `${fence}terraform`, text, fence].join('\n');
 }
 
 const MODES = ['summary', 'pending', 'comment'];
@@ -192,6 +205,8 @@ async function main({ github, context, core, inputs }) {
       name: inputs.name,
       prefix,
       maxChars: Number(inputs.maxPlanChars || 60000),
+      // One line, so the heading cannot start the plan text early.
+      heading: (inputs.heading || '').replace(/\s+/g, ' ').trim(),
     });
   }
 

@@ -23,6 +23,11 @@ inputs:
       "comment" mode: characters of plan output kept in the comment. A longer plan
       keeps its end, where the Plan: line and any errors are.
     default: "60000"
+  heading:
+    description: >-
+      "comment" mode: heading of the plan comment. The default is
+      "Terraform plan: `NAME`".
+    default: ""
   title:
     description: Heading of the summary comment.
     default: Terraform plan summary
@@ -61,6 +66,7 @@ runs:
         TPS_NAME: ${{ inputs.name }}
         TPS_PLAN_FILE: ${{ inputs.plan-file }}
         TPS_MAX_PLAN_CHARS: ${{ inputs.max-plan-chars }}
+        TPS_HEADING: ${{ inputs.heading }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -78,5 +84,6 @@ runs:
               name: process.env.TPS_NAME,
               planFile: process.env.TPS_PLAN_FILE,
               maxPlanChars: process.env.TPS_MAX_PLAN_CHARS,
+              heading: process.env.TPS_HEADING,
             },
           });

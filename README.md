@@ -86,6 +86,7 @@ A plan that prints its totals and then fails shows ❌. The error wins.
 | `name` | | `comment` mode: the plan name in the marker and the table, such as `prod`. No spaces. |
 | `plan-file` | | `comment` mode: path to the text output of `terraform plan`, from the workspace root. |
 | `max-plan-chars` | `60000` | `comment` mode: characters of plan output kept. A comment holds 65,536. |
+| `heading` | ``Terraform plan: `NAME` `` | `comment` mode: heading of the plan comment. |
 | `title` | `Terraform plan summary` | Heading of the summary comment. |
 | `marker-prefix` | `tf-plan` | Plan comments start with `<!-- PREFIX: NAME -->`. Change it to keep two summaries on one pull request apart. |
 | `max-resources` | `20` | Resources listed per plan. The rest become "… and N more in the plan". |
@@ -98,6 +99,7 @@ Output: `comment-url`, the URL of the comment that the step wrote.
 
 - Every mode reads all pages of comments, so a pull request with hundreds of comments works the same as a new one.
 - Rows sort by plan name.
+- When the summary comment is deleted and posted again, the next summary run points each backlink at the new one.
 - If one plan has two comments, the later one wins. `comment` mode updates the later one.
 - Each run updates the same summary comment. It finds the comment by `<!-- PREFIX-summary -->`.
 - A run that is not for a pull request, or that finds no plan comments, does nothing and does not fail.
