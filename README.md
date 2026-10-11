@@ -12,13 +12,22 @@ A pull request that plans three environments gets three long comments, and peopl
 
 ## Usage
 
-Your plan jobs already post their output as a comment. Start each one with a marker that names the plan:
+Each plan job posts its plan as a comment. The action can post it for you:
 
-```
-<!-- tf-plan: prod -->
+```yaml
+      - run: terraform plan -no-color -out=tfplan 2>&1 | tee plan.txt
+
+      - uses: fizz/terraform-plan-summary@v1
+        if: github.event_name == 'pull_request'
+        with:
+          mode: comment
+          name: prod
+          plan-file: plan.txt
 ```
 
-The rest of the comment is yours. Put the `terraform plan` output in it as text. The action reads the `# address will be created` lines and the `Plan:` line.
+The comment starts with `<!-- tf-plan: prod -->`. Each run updates that comment and does not post a new one, however many comments the pull request has. A plan longer than `max-plan-chars` keeps its end, where the `Plan:` line and any errors are. The link back to the summary stays when the comment is updated.
+
+You can also post the comment yourself. Start it with the same marker, and put the `terraform plan` output in it as text. The action reads the `# address will be created` lines and the `Plan:` line.
 
 Then add two jobs:
 
@@ -73,19 +82,23 @@ A plan that prints its totals and then fails shows ❌. The error wins.
 
 | Input | Default | Description |
 |---|---|---|
-| `mode` | `summary` | `summary` builds the table. `pending` marks it as out of date. |
+| `mode` | `summary` | `comment` posts or updates one plan comment. `summary` builds the table. `pending` marks it as out of date. |
+| `name` | | `comment` mode: the plan name in the marker and the table, such as `prod`. No spaces. |
+| `plan-file` | | `comment` mode: path to the text output of `terraform plan`, from the workspace root. |
+| `max-plan-chars` | `60000` | `comment` mode: characters of plan output kept. A comment holds 65,536. |
 | `title` | `Terraform plan summary` | Heading of the summary comment. |
 | `marker-prefix` | `tf-plan` | Plan comments start with `<!-- PREFIX: NAME -->`. Change it to keep two summaries on one pull request apart. |
 | `max-resources` | `20` | Resources listed per plan. The rest become "… and N more in the plan". |
 | `backlinks` | `true` | Add a link from each plan comment back to the summary. |
 | `github-token` | `github.token` | Needs to read and write pull request comments. |
 
-Output: `comment-url`, the URL of the summary comment.
+Output: `comment-url`, the URL of the comment that the step wrote.
 
 ## Behavior
 
+- Every mode reads all pages of comments, so a pull request with hundreds of comments works the same as a new one.
 - Rows sort by plan name.
-- If one plan has two comments, the later one wins.
+- If one plan has two comments, the later one wins. `comment` mode updates the later one.
 - Each run updates the same summary comment. It finds the comment by `<!-- PREFIX-summary -->`.
 - A run that is not for a pull request, or that finds no plan comments, does nothing and does not fail.
 - Data sources read during apply are not changes, so they are not listed.

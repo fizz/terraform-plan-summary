@@ -1,9 +1,12 @@
 'use strict';
 
 // Each plan job posts one comment that starts with a marker such as
-// <!-- tf-plan: prod -->. This file reads those comments and keeps a single
-// summary comment on the pull request: one row per plan, an icon for the kind of
-// change, the resources it touches, and a link to the full plan.
+// <!-- tf-plan: prod -->. This file writes those comments ("comment" mode), and
+// keeps a single summary comment on the pull request ("summary" and "pending"
+// modes): one row per plan, an icon for the kind of change, the resources it
+// touches, and a link to the full plan.
+
+const fs = require('fs');
 
 const ICONS = {
   none: '✅',
@@ -141,28 +144,84 @@ function withBacklink(body, { backlinkMarker, title, url }) {
   return `${body}\n\n---\n${backlinkMarker}\n[↩ Back to ${title}](${url})`;
 }
 
+// The backlink block that withBacklink appended, or '' when there is none.
+function backlinkOf(body, backlinkMarker) {
+  const at = body.indexOf(`\n\n---\n${backlinkMarker}`);
+  return at === -1 ? '' : body.slice(at);
+}
+
+// A comment holds 65,536 characters. A long plan keeps its end, where the Plan:
+// line and any errors are, and says at the top that the start is missing.
+function renderPlanComment(plan, { name, prefix, maxChars }) {
+  const text = plan.length > maxChars ? `... (start of the plan truncated) ...\n\n${plan.slice(-maxChars)}` : plan;
+  let fence = '```';
+  while (text.includes(fence)) fence += '`';
+  return [`<!-- ${prefix}: ${name} -->`, `### Terraform plan: \`${name}\``, '', `${fence}terraform`, text, fence].join('\n');
+}
+
+const MODES = ['summary', 'pending', 'comment'];
+const NAME = /^[^\s>]+$/;
+
 async function main({ github, context, core, inputs }) {
   const mode = inputs.mode || 'summary';
-  if (mode !== 'summary' && mode !== 'pending') {
-    throw new Error(`mode must be "summary" or "pending", not "${mode}"`);
+  if (!MODES.includes(mode)) {
+    throw new Error(`mode must be one of ${MODES.map((m) => `"${m}"`).join(', ')}, not "${mode}"`);
   }
 
   const issueNumber = context.issue && context.issue.number;
   if (!issueNumber) {
-    core.info('This run is not for a pull request. There is nothing to summarize.');
+    core.info('This run is not for a pull request. There is nothing to do.');
     return;
   }
 
   const title = inputs.title || 'Terraform plan summary';
   const maxResources = Number(inputs.maxResources || 20);
-  const mark = markers(inputs.prefix || 'tf-plan');
+  const prefix = inputs.prefix || 'tf-plan';
+  const mark = markers(prefix);
   const repo = { owner: context.repo.owner, repo: context.repo.repo };
 
+  // Check the inputs before any API call.
+  let planBody;
+  if (mode === 'comment') {
+    if (!inputs.name || !NAME.test(inputs.name)) {
+      throw new Error(`"comment" mode needs a name with no spaces or ">", such as "prod". Got "${inputs.name || ''}".`);
+    }
+    if (!inputs.planFile) throw new Error('"comment" mode needs plan-file.');
+    if (!fs.existsSync(inputs.planFile)) throw new Error(`plan-file ${inputs.planFile} does not exist.`);
+    planBody = renderPlanComment(fs.readFileSync(inputs.planFile, 'utf8'), {
+      name: inputs.name,
+      prefix,
+      maxChars: Number(inputs.maxPlanChars || 60000),
+    });
+  }
+
+  // Read every page. With only the first page, a pull request with more than 100
+  // comments hides the comment, and each run posts another one.
   const comments = await github.paginate(github.rest.issues.listComments, {
     ...repo,
     issue_number: issueNumber,
     per_page: 100,
   });
+
+  if (mode === 'comment') {
+    const own = comments.filter((c) => {
+      const m = c.body && c.body.match(mark.plan);
+      return m && m[1] === inputs.name;
+    });
+    // A later comment wins in the summary, so update the latest one.
+    const target = own[own.length - 1];
+    let data;
+    if (target) {
+      // Keep the link to the summary. Without it, the link is gone until the next summary run.
+      const body = planBody + backlinkOf(target.body, mark.backlink);
+      ({ data } = await github.rest.issues.updateComment({ ...repo, comment_id: target.id, body }));
+    } else {
+      ({ data } = await github.rest.issues.createComment({ ...repo, issue_number: issueNumber, body: planBody }));
+    }
+    core.setOutput('comment-url', data.html_url);
+    return;
+  }
+
   const existing = comments.find((c) => c.body && c.body.includes(mark.summary));
 
   async function upsert(body) {
@@ -211,6 +270,7 @@ module.exports = {
   iconFor,
   renderSummary,
   renderPending,
+  renderPlanComment,
   withBacklink,
   main,
 };

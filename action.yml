@@ -1,5 +1,5 @@
 name: Terraform plan summary
-description: Collects the Terraform plan comments on a pull request into one summary table.
+description: Posts Terraform plans as pull request comments and collects them into one summary table.
 author: fizz
 branding:
   icon: list
@@ -8,9 +8,21 @@ branding:
 inputs:
   mode:
     description: >-
+      "comment" posts one plan as a comment, or updates that plan's comment.
       "summary" builds the table from the plan comments. "pending" marks the table as
       out of date while new plans run.
     default: summary
+  name:
+    description: '"comment" mode: the plan name in the marker and the table, such as "prod".'
+    default: ""
+  plan-file:
+    description: '"comment" mode: path to the text output of terraform plan.'
+    default: ""
+  max-plan-chars:
+    description: >-
+      "comment" mode: characters of plan output kept in the comment. A longer plan
+      keeps its end, where the Plan: line and any errors are.
+    default: "60000"
   title:
     description: Heading of the summary comment.
     default: Terraform plan summary
@@ -31,7 +43,7 @@ inputs:
 
 outputs:
   comment-url:
-    description: URL of the summary comment.
+    description: URL of the comment that this step wrote.
     value: ${{ steps.run.outputs.comment-url }}
 
 runs:
@@ -46,6 +58,9 @@ runs:
         TPS_PREFIX: ${{ inputs.marker-prefix }}
         TPS_MAX_RESOURCES: ${{ inputs.max-resources }}
         TPS_BACKLINKS: ${{ inputs.backlinks }}
+        TPS_NAME: ${{ inputs.name }}
+        TPS_PLAN_FILE: ${{ inputs.plan-file }}
+        TPS_MAX_PLAN_CHARS: ${{ inputs.max-plan-chars }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -60,5 +75,8 @@ runs:
               prefix: process.env.TPS_PREFIX,
               maxResources: process.env.TPS_MAX_RESOURCES,
               backlinks: process.env.TPS_BACKLINKS,
+              name: process.env.TPS_NAME,
+              planFile: process.env.TPS_PLAN_FILE,
+              maxPlanChars: process.env.TPS_MAX_PLAN_CHARS,
             },
           });

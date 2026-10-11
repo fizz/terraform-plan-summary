@@ -120,14 +120,23 @@ test('a custom prefix changes every marker', () => {
 });
 
 // A fake of the github-script client: enough of issues.* to run main().
+// listComments returns one page, as the API does, so code that skips paginate
+// sees only the first per_page comments.
 function fakeGithub(comments) {
   const calls = [];
   let nextId = 1000;
   const github = {
-    paginate: async (fn, args) => fn(args),
+    paginate: async (fn, args) => {
+      const all = [];
+      for (let page = 1; ; page++) {
+        const items = await fn({ ...args, page });
+        all.push(...items);
+        if (items.length < args.per_page) return all;
+      }
+    },
     rest: {
       issues: {
-        listComments: async () => comments,
+        listComments: async ({ page = 1, per_page = 30 }) => comments.slice((page - 1) * per_page, page * per_page),
         createComment: async ({ body }) => {
           const c = { id: nextId++, body, html_url: `https://x/c/${nextId}` };
           comments.push(c);
@@ -190,4 +199,93 @@ test('main does nothing outside a pull request or without plans', async () => {
 test('main rejects an unknown mode', async () => {
   const { github } = fakeGithub([]);
   await assert.rejects(s.main({ github, context, core, inputs: { mode: 'apply' } }), /mode must be/);
+});
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+function planFile(text) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tps-'));
+  const file = path.join(dir, 'plan.txt');
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+function filler(n, from = 1) {
+  return Array.from({ length: n }, (_, i) => ({ id: from + i, body: `review comment ${from + i}`, html_url: `u${from + i}` }));
+}
+
+test('a long plan keeps its end and says so at the top', () => {
+  const plan = 'START\n' + 'x'.repeat(100) + '\nPlan: 1 to add, 0 to change, 0 to destroy.';
+  const body = s.renderPlanComment(plan, { name: 'dev', prefix: 'tf-plan', maxChars: 60 });
+  assert.match(body, /^<!-- tf-plan: dev -->\n/);
+  assert.match(body, /```terraform\n\.\.\. \(start of the plan truncated\) \.\.\./);
+  assert.match(body, /Plan: 1 to add, 0 to change, 0 to destroy\.\n```$/);
+  assert.doesNotMatch(body, /START/);
+  assert.equal(s.parsePlan(body, mark.plan).status, 'changes');
+});
+
+test('a plan that holds a code fence gets a longer fence', () => {
+  const body = s.renderPlanComment('a ``` b', { name: 'dev', prefix: 'tf-plan', maxChars: 60000 });
+  assert.match(body, /\n````terraform\n/);
+  assert.match(body, /\n````$/);
+});
+
+test('comment mode posts a plan comment when there is none', async () => {
+  const comments = filler(3);
+  const { github, calls } = fakeGithub(comments);
+  const file = planFile('No changes.');
+  await s.main({ github, context, core, inputs: { mode: 'comment', name: 'dev', planFile: file } });
+  assert.deepEqual(calls, [['create', 1000]]);
+  assert.equal(s.parsePlan(comments[3].body, mark.plan).name, 'dev');
+});
+
+test('comment mode finds its comment after the first 100 and updates it', async () => {
+  const old = { id: 500, body: s.renderPlanComment('No changes.', { name: 'dev', prefix: 'tf-plan', maxChars: 60000 }), html_url: 'u500' };
+  const prod = { id: 501, body: s.renderPlanComment('No changes.', { name: 'prod', prefix: 'tf-plan', maxChars: 60000 }), html_url: 'u501' };
+  const comments = [...filler(130), old, prod];
+  const { github, calls } = fakeGithub(comments);
+  const file = planFile('Plan: 2 to add, 0 to change, 0 to destroy.');
+  await s.main({ github, context, core, inputs: { mode: 'comment', name: 'dev', planFile: file } });
+  assert.deepEqual(calls, [['update', 500]]);
+  assert.match(old.body, /2 to add/);
+  assert.match(prod.body, /No changes\./);
+  assert.equal(core.out['comment-url'], 'u500');
+});
+
+test('comment mode keeps the backlink that the summary added', async () => {
+  const comments = filler(2);
+  const { github } = fakeGithub(comments);
+  const inputs = { mode: 'comment', name: 'dev', planFile: planFile('No changes.') };
+  await s.main({ github, context, core, inputs });
+  await s.main({ github, context, core, inputs: { mode: 'summary' } });
+
+  const dev = comments.find((c) => s.parsePlan(c.body, mark.plan));
+  assert.equal(dev.body.split(mark.backlink).length, 2);
+
+  inputs.planFile = planFile('Plan: 0 to add, 1 to change, 0 to destroy.');
+  await s.main({ github, context, core, inputs });
+  assert.match(dev.body, /1 to change/);
+  assert.equal(dev.body.split(mark.backlink).length, 2);
+  assert.match(dev.body, /\[↩ Back to Terraform plan summary\]/);
+});
+
+test('comment mode checks its inputs before any API call', async () => {
+  const { github, calls } = fakeGithub([]);
+  await assert.rejects(s.main({ github, context, core, inputs: { mode: 'comment', planFile: 'x' } }), /needs a name/);
+  await assert.rejects(s.main({ github, context, core, inputs: { mode: 'comment', name: 'a b', planFile: 'x' } }), /needs a name/);
+  await assert.rejects(s.main({ github, context, core, inputs: { mode: 'comment', name: 'dev' } }), /needs plan-file/);
+  await assert.rejects(
+    s.main({ github, context, core, inputs: { mode: 'comment', name: 'dev', planFile: '/no/such/plan.txt' } }),
+    /does not exist/,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test('summary mode reads past the first 100 comments', async () => {
+  const comments = [...filler(150), { id: 900, body: planComment('dev', 'No changes.'), html_url: 'u900' }];
+  const { github } = fakeGithub(comments);
+  await s.main({ github, context, core, inputs: { backlinks: 'false' } });
+  assert.match(comments.find((c) => c.body.includes(mark.summary)).body, /\[dev\]\(u900\)/);
 });
