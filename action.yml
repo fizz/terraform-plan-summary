@@ -1,0 +1,64 @@
+name: Terraform plan summary
+description: Collects the Terraform plan comments on a pull request into one summary table.
+author: fizz
+branding:
+  icon: list
+  color: purple
+
+inputs:
+  mode:
+    description: >-
+      "summary" builds the table from the plan comments. "pending" marks the table as
+      out of date while new plans run.
+    default: summary
+  title:
+    description: Heading of the summary comment.
+    default: Terraform plan summary
+  marker-prefix:
+    description: >-
+      Plan comments start with <!-- PREFIX: NAME -->. The summary comment uses
+      <!-- PREFIX-summary -->.
+    default: tf-plan
+  max-resources:
+    description: Resources listed per plan before the rest collapse into a count.
+    default: "20"
+  backlinks:
+    description: Add a link from each plan comment back to the summary.
+    default: "true"
+  github-token:
+    description: Token that can read and write pull request comments.
+    default: ${{ github.token }}
+
+outputs:
+  comment-url:
+    description: URL of the summary comment.
+    value: ${{ steps.run.outputs.comment-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@v9
+      env:
+        TPS_ACTION_PATH: ${{ github.action_path }}
+        TPS_MODE: ${{ inputs.mode }}
+        TPS_TITLE: ${{ inputs.title }}
+        TPS_PREFIX: ${{ inputs.marker-prefix }}
+        TPS_MAX_RESOURCES: ${{ inputs.max-resources }}
+        TPS_BACKLINKS: ${{ inputs.backlinks }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { main } = require(`${process.env.TPS_ACTION_PATH}/src/summary.js`);
+          await main({
+            github,
+            context,
+            core,
+            inputs: {
+              mode: process.env.TPS_MODE,
+              title: process.env.TPS_TITLE,
+              prefix: process.env.TPS_PREFIX,
+              maxResources: process.env.TPS_MAX_RESOURCES,
+              backlinks: process.env.TPS_BACKLINKS,
+            },
+          });
