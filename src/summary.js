@@ -381,14 +381,38 @@ async function main({ github, context, core, inputs }) {
     return;
   }
 
-  const existing = comments.find((c) => c.body && c.body.includes(mark.summary));
+  const isSummary = (c) => c.body && c.body.includes(mark.summary);
+  const existing = comments.find(isSummary);
 
+  // Removes every summary comment but the one kept. A comment that another run
+  // removed first is already gone, which is the same result.
+  async function removeOthers(summaries, keep) {
+    for (const c of summaries) {
+      if (c.id === keep.id) continue;
+      try {
+        await github.rest.issues.deleteComment({ ...repo, comment_id: c.id });
+      } catch (error) {
+        if (error.status !== 404) throw error;
+      }
+    }
+  }
+
+  // Jobs that start together can each find no summary and each post one. After
+  // a post, the oldest summary comment is the one to keep: every job sees the
+  // same oldest comment, so they all keep it and remove the others.
   async function upsert(body) {
     if (existing) {
+      await removeOthers(comments.filter(isSummary), existing);
       const { data } = await github.rest.issues.updateComment({ ...repo, comment_id: existing.id, body });
       return data;
     }
-    const { data } = await github.rest.issues.createComment({ ...repo, issue_number: issueNumber, body });
+    const { data: created } = await github.rest.issues.createComment({ ...repo, issue_number: issueNumber, body });
+    const now = await github.paginate(github.rest.issues.listComments, { ...repo, issue_number: issueNumber, per_page: 100 });
+    const summaries = now.filter(isSummary).sort((a, b) => a.id - b.id);
+    const keep = summaries[0] || created;
+    await removeOthers(summaries, keep);
+    if (keep.id === created.id) return created;
+    const { data } = await github.rest.issues.updateComment({ ...repo, comment_id: keep.id, body });
     return data;
   }
 

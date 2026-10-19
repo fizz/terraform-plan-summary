@@ -161,6 +161,12 @@ function fakeGithub(comments) {
           calls.push(['update', comment_id]);
           return { data: c };
         },
+        deleteComment: async ({ comment_id }) => {
+          const i = comments.findIndex((x) => x.id === comment_id);
+          if (i === -1) throw Object.assign(new Error('Not Found'), { status: 404 });
+          comments.splice(i, 1);
+          calls.push(['delete', comment_id]);
+        },
       },
     },
   };
@@ -323,4 +329,25 @@ test('summary mode reads past the first 100 comments', async () => {
   const { github } = fakeGithub(comments);
   await s.main({ github, context, core, inputs: { backlinks: 'false' } });
   assert.match(comments.find((c) => c.body.includes(mark.summary)).body, /\[dev\]\(u900\)/);
+});
+
+test('pending runs that start together leave one summary comment', async () => {
+  const comments = [{ id: 1, body: planComment('dev', 'No changes.'), html_url: 'u1' }];
+  const { github, calls } = fakeGithub(comments);
+  await Promise.all([1, 2, 3].map(() => s.main({ github, context, core, inputs: { mode: 'pending' } })));
+  assert.equal(calls.filter(([op]) => op === 'create').length, 3);
+  assert.deepEqual(comments.filter((c) => c.body.includes(mark.summary)).map((c) => c.id), [1000]);
+});
+
+test('a summary run removes summary comments left by an earlier race', async () => {
+  const comments = [
+    { id: 1, body: planComment('dev', 'No changes.'), html_url: 'u1' },
+    { id: 2, body: `${mark.summary}\n### Terraform plan summary\n\nold`, html_url: 'u2' },
+    { id: 3, body: `${mark.summary}\n### Terraform plan summary\n\nempty`, html_url: 'u3' },
+  ];
+  const { github } = fakeGithub(comments);
+  await s.main({ github, context, core, inputs: { backlinks: 'false' } });
+  const summaries = comments.filter((c) => c.body.includes(mark.summary));
+  assert.deepEqual(summaries.map((c) => c.id), [2]);
+  assert.match(summaries[0].body, /\[dev\]\(u1\)/);
 });
