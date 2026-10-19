@@ -1,5 +1,5 @@
 name: Terraform plan summary
-description: Posts Terraform plans as pull request comments and collects them into one summary table.
+description: Posts Terraform plans as pull request comments and collects them into one summary table with a card for each resource.
 author: fizz
 branding:
   icon: list
@@ -17,6 +17,12 @@ inputs:
     default: ""
   plan-file:
     description: '"comment" mode: path to the text output of terraform plan.'
+    default: ""
+  plan-json:
+    description: >-
+      "comment" mode: path to the output of terraform show -json PLANFILE. With it,
+      the summary shows each resource as a card of the attributes that change, with
+      sensitive values masked. Without it, the summary lists addresses only.
     default: ""
   max-plan-chars:
     description: >-
@@ -38,6 +44,9 @@ inputs:
     default: tf-plan
   max-resources:
     description: Resources listed per plan before the rest collapse into a count.
+    default: "20"
+  max-changes:
+    description: Changed attributes shown on each resource card before the rest collapse into a count.
     default: "20"
   backlinks:
     description: Add a link from each plan comment back to the summary.
@@ -62,9 +71,11 @@ runs:
         TPS_TITLE: ${{ inputs.title }}
         TPS_PREFIX: ${{ inputs.marker-prefix }}
         TPS_MAX_RESOURCES: ${{ inputs.max-resources }}
+        TPS_MAX_CHANGES: ${{ inputs.max-changes }}
         TPS_BACKLINKS: ${{ inputs.backlinks }}
         TPS_NAME: ${{ inputs.name }}
         TPS_PLAN_FILE: ${{ inputs.plan-file }}
+        TPS_PLAN_JSON: ${{ inputs.plan-json }}
         TPS_MAX_PLAN_CHARS: ${{ inputs.max-plan-chars }}
         TPS_HEADING: ${{ inputs.heading }}
       with:
@@ -80,9 +91,11 @@ runs:
               title: process.env.TPS_TITLE,
               prefix: process.env.TPS_PREFIX,
               maxResources: process.env.TPS_MAX_RESOURCES,
+              maxChanges: process.env.TPS_MAX_CHANGES,
               backlinks: process.env.TPS_BACKLINKS,
               name: process.env.TPS_NAME,
               planFile: process.env.TPS_PLAN_FILE,
+              planJson: process.env.TPS_PLAN_JSON,
               maxPlanChars: process.env.TPS_MAX_PLAN_CHARS,
               heading: process.env.TPS_HEADING,
             },

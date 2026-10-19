@@ -79,7 +79,7 @@ test('renders a sorted table, links each plan and caps resources', () => {
   assert.equal(lines[1], '### T');
   assert.match(lines[5], /^\| \[dev\]\(https:\/\/x\/dev\) \| ✅ No changes\. \|$/);
   assert.match(lines[6], /^\| \[prod\]/);
-  assert.match(lines[6], /`aws_s3_bucket.logs` \(create\)/);
+  assert.match(lines[6], /<code>aws_s3_bucket\.logs<\/code> <i>create<\/i>/);
   assert.match(lines[6], /… and 1 more in the plan/);
   assert.doesNotMatch(lines[6], /aws_instance\.web/);
 });

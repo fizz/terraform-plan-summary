@@ -7,6 +7,7 @@
 // touches, and a link to the full plan.
 
 const fs = require('fs');
+const { planChanges, encode, decode, SENSITIVE } = require('./changes.js');
 
 const ICONS = {
   none: '✅',
@@ -30,6 +31,7 @@ function markers(prefix) {
     plan: new RegExp(`<!-- ${escapeRegExp(prefix)}: ([^\\s>]+) -->`),
     summary: `<!-- ${prefix}-summary -->`,
     backlink: `<!-- ${prefix}-backlink -->`,
+    changes: new RegExp(`<!-- ${escapeRegExp(prefix)}-changes: ([A-Za-z0-9+/=]+) -->`),
   };
 }
 
@@ -60,11 +62,15 @@ const PLAN_LINE =
   /Plan: (?:(\d+) to import, )?(\d+) to add, (\d+) to change, (\d+) to destroy\./;
 
 // Returns null when the comment is not a plan comment.
-function parsePlan(body, planMarker) {
+function parsePlan(body, planMarker, changesMarker) {
   const marker = body.match(planMarker);
   if (!marker) return null;
 
-  const plan = { name: marker[1], resources: parseResources(body) };
+  // A plan comment written with plan-json carries its changes. Older comments
+  // and plans posted without it list addresses only.
+  const embedded = changesMarker && body.match(changesMarker);
+  const resources = (embedded && decode(embedded[1])) || parseResources(body);
+  const plan = { name: marker[1], resources };
 
   // A plan can print its totals and then fail, so an error wins.
   if (/^[ \t│]*Error: /m.test(body)) {
@@ -102,25 +108,153 @@ function cell(text) {
   return String(text).replace(/\|/g, '\\|');
 }
 
-function renderRow(plan, maxResources) {
+// Card text sits inside HTML, where markdown does not apply.
+function html(text) {
+  return cell(String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+}
+
+// Commit SHAs and digests keep their first 12 characters, which is enough to
+// tell them apart. Every other part of a value stays, because that is the change.
+function trimHashes(value) {
+  return value.replace(/\b([0-9a-f]{12})[0-9a-f]{8,}\b/g, '$1');
+}
+
+const ACTION_ICONS = {
+  create: '🆕',
+  update: '🔧',
+  replace: '♻️',
+  destroy: '🗑️',
+  move: '➡️',
+  forget: '📤',
+};
+
+const code = (text) => `<code>${html(trimHashes(text))}</code>`;
+
+function unquote(value) {
+  if (typeof value !== 'string' || !value.startsWith('"')) return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+const ARN = /^arn:([^:]+):([^:]*):([^:]*):([^:]*):(.+)$/;
+const IMAGE = /^([a-z0-9.-]+\.[a-z]{2,}(?::\d+)?)\/([a-z0-9._/-]+?)(?::([\w.-]+))?(?:@(sha256:[0-9a-f]+))?$/;
+
+// A value split into the parts a reader looks for, and the name of what it
+// points at. Values with no known shape are one part.
+function partsOf(raw) {
+  const value = unquote(raw);
+  if (typeof value !== 'string') return { name: null, parts: [['value', String(raw)]] };
+
+  const arn = value.match(ARN);
+  if (arn) {
+    const [, partition, service, region, account, resource] = arn;
+    const at = Math.max(resource.lastIndexOf('/'), resource.lastIndexOf(':'));
+    const name = at === -1 ? resource : resource.slice(at + 1);
+    const parts = [['service', service]];
+    if (region) parts.push(['region', region]);
+    if (account) parts.push(['account', account]);
+    if (at !== -1) {
+      const head = resource.slice(0, at);
+      const split = head.search(/[/:]/);
+      parts.push(['type', split === -1 ? head : head.slice(0, split)]);
+      if (split !== -1) parts.push(['path', head.slice(split)]);
+    }
+    if (partition !== 'aws') parts.push(['partition', partition]);
+    return { name, parts };
+  }
+
+  const image = value.match(IMAGE);
+  if (image) {
+    const [, registry, repository, tag, digest] = image;
+    const parts = [['registry', registry], ['repository', repository]];
+    if (tag) parts.push(['tag', tag]);
+    if (digest) parts.push(['digest', digest]);
+    return { name: repository.split('/').pop(), parts };
+  }
+
+  return { name: value, parts: [['value', value]] };
+}
+
+function renderParts(parts) {
+  if (parts.length === 1 && parts[0][0] === 'value') return code(parts[0][1]);
+  return parts.map(([k, v]) => `${html(k)}: ${code(v)}`).join('<br>');
+}
+
+function fieldParts(fields) {
+  return (fields || []).map(([k, v]) => [k, String(unquote(v))]);
+}
+
+// What a card shows: its type (where the value lives), its name, its state, and
+// the new value on the front with the old value on the back.
+function cardOf(change) {
+  const type = change.group || '';
+  const idKey = change.key && change.key.startsWith('[') ? String(unquote(change.key.slice(1, -1))) : null;
+
+  if (change.added || change.removed) {
+    const fields = fieldParts(change.fields);
+    const named = fields.find(([k]) => /(^|\.)(name|secretKey|key|id|Sid)$/.test(k));
+    const name = idKey || (named && named[1]) || 'item';
+    return { type, name, state: change.added ? 'added' : 'removed', front: fields, back: null };
+  }
+
+  if (change.before === SENSITIVE && change.after === SENSITIVE) {
+    return { type, name: change.key, state: 'changed', front: [['value', '(sensitive value changes)']], back: null };
+  }
+
+  const after = change.after !== null ? partsOf(change.after) : null;
+  const before = change.before !== null ? partsOf(change.before) : null;
+  // A value added to or removed from a list is named by what it points at.
+  const name = idKey || change.key || (after || before).name;
+  if (after && before) return { type, name, state: 'changed', front: after.parts, back: before.parts };
+  if (after) return { type, name, state: 'added', front: after.parts, back: null };
+  return { type, name, state: 'removed', front: before.parts, back: null };
+}
+
+const STATE_ICONS = { added: '🆕', removed: '🗑️', changed: '🔧' };
+
+function renderChangeCard(change) {
+  const card = cardOf(change);
+  const forces = change.forces ? ' <b>forces replacement</b>' : '';
+  const type = card.type ? `<sub>${html(card.type)}</sub><br>` : '';
+  const head = `${type}${STATE_ICONS[card.state]} <b>${html(trimHashes(String(card.name)))}</b> <i>${card.state}</i>${forces}`;
+  let body = renderParts(card.front);
+  if (card.back) body += `<details><summary>before</summary>${renderParts(card.back)}</details>`;
+  return `<table><tr><th align="left">${head}</th></tr><tr><td>${body}</td></tr></table>`;
+}
+
+// A card for one resource, holding a card for each thing in it that changes.
+function renderCard(resource, maxChanges) {
+  const from = resource.from ? ` from <code>${html(resource.from)}</code>` : '';
+  const head = `${ACTION_ICONS[resource.action] || ''} <code>${html(resource.address)}</code> <i>${resource.action}</i>${from}`;
+  const changes = (resource.changes || []).slice(0, maxChanges);
+  const rows = changes.map((change) => `<tr><td>${renderChangeCard(change)}</td></tr>`);
+  const hidden = (resource.total || changes.length) - changes.length;
+  if (hidden > 0) rows.push(`<tr><td>… and ${hidden} more in the plan</td></tr>`);
+  return `<table><tr><th align="left">${head}</th></tr>${rows.join('')}</table>`;
+}
+
+function renderRow(plan, maxResources, maxChanges) {
   const name = plan.url ? `[${cell(plan.name)}](${plan.url})` : cell(plan.name);
   let result = `${iconFor(plan)} ${cell(plan.headline)}`;
 
   if (plan.status !== 'none' && plan.resources.length > 0) {
     const shown = plan.resources.slice(0, maxResources);
-    const lines = shown.map((r) => `&emsp;↳ \`${cell(r.address)}\` (${r.action})`);
+    const cards = shown.map((r) => renderCard(r, maxChanges));
     const hidden = plan.resources.length - shown.length;
-    if (hidden > 0) lines.push(`&emsp;… and ${hidden} more in the plan`);
-    result += '<br>' + lines.join('<br>');
+    if (hidden > 0) cards.push(`… and ${hidden} more in the plan`);
+    result += cards.join('');
   }
 
   return `| ${name} | ${result} |`;
 }
 
-function renderSummary(plans, { title, summaryMarker, maxResources }) {
+function renderSummary(plans, { title, summaryMarker, maxResources, maxChanges = 20 }) {
   const rows = [...plans]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((plan) => renderRow(plan, maxResources));
+    .map((plan) => renderRow(plan, maxResources, maxChanges));
   return [summaryMarker, `### ${title}`, '', '| Plan | Result |', '|------|--------|', ...rows].join('\n');
 }
 
@@ -165,11 +299,14 @@ function backlinkOf(body, backlinkMarker) {
 
 // A comment holds 65,536 characters. A long plan keeps its end, where the Plan:
 // line and any errors are, and says at the top that the start is missing.
-function renderPlanComment(plan, { name, prefix, maxChars, heading }) {
+function renderPlanComment(plan, { name, prefix, maxChars, heading, changes }) {
+  const payload = changes ? `<!-- ${prefix}-changes: ${encode(changes)} -->` : null;
+  // The changes share the comment with the plan text, so the text gives up room.
+  if (payload) maxChars = Math.max(1000, maxChars - payload.length - 1);
   const text = plan.length > maxChars ? `... (start of the plan truncated) ...\n\n${plan.slice(-maxChars)}` : plan;
   let fence = '```';
   while (text.includes(fence)) fence += '`';
-  return [`<!-- ${prefix}: ${name} -->`, `### ${heading || `Terraform plan: \`${name}\``}`, '', `${fence}terraform`, text, fence].join('\n');
+  return [`<!-- ${prefix}: ${name} -->`, ...(payload ? [payload] : []), `### ${heading || `Terraform plan: \`${name}\``}`, '', `${fence}terraform`, text, fence].join('\n');
 }
 
 const MODES = ['summary', 'pending', 'comment'];
@@ -189,6 +326,7 @@ async function main({ github, context, core, inputs }) {
 
   const title = inputs.title || 'Terraform plan summary';
   const maxResources = Number(inputs.maxResources || 20);
+  const maxChanges = Number(inputs.maxChanges || 20);
   const prefix = inputs.prefix || 'tf-plan';
   const mark = markers(prefix);
   const repo = { owner: context.repo.owner, repo: context.repo.repo };
@@ -201,12 +339,18 @@ async function main({ github, context, core, inputs }) {
     }
     if (!inputs.planFile) throw new Error('"comment" mode needs plan-file.');
     if (!fs.existsSync(inputs.planFile)) throw new Error(`plan-file ${inputs.planFile} does not exist.`);
+    let changes = null;
+    if (inputs.planJson) {
+      if (!fs.existsSync(inputs.planJson)) throw new Error(`plan-json ${inputs.planJson} does not exist.`);
+      changes = planChanges(JSON.parse(fs.readFileSync(inputs.planJson, 'utf8')));
+    }
     planBody = renderPlanComment(fs.readFileSync(inputs.planFile, 'utf8'), {
       name: inputs.name,
       prefix,
       maxChars: Number(inputs.maxPlanChars || 60000),
       // One line, so the heading cannot start the plan text early.
       heading: (inputs.heading || '').replace(/\s+/g, ' ').trim(),
+      changes,
     });
   }
 
@@ -257,7 +401,7 @@ async function main({ github, context, core, inputs }) {
   // Comments arrive oldest first. A later comment for the same plan wins.
   const byName = new Map();
   for (const comment of comments) {
-    const plan = parsePlan(comment.body || '', mark.plan);
+    const plan = parsePlan(comment.body || '', mark.plan, mark.changes);
     if (plan) byName.set(plan.name, { ...plan, url: comment.html_url, comment });
   }
   const plans = [...byName.values()];
@@ -267,7 +411,7 @@ async function main({ github, context, core, inputs }) {
     return;
   }
 
-  const summary = await upsert(renderSummary(plans, { title, summaryMarker: mark.summary, maxResources }));
+  const summary = await upsert(renderSummary(plans, { title, summaryMarker: mark.summary, maxResources, maxChanges }));
   core.setOutput('comment-url', summary.html_url);
 
   if (inputs.backlinks === false || inputs.backlinks === 'false') return;
