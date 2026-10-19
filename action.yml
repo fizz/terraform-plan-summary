@@ -22,7 +22,9 @@ inputs:
     description: >-
       "comment" mode: path to the output of terraform show -json PLANFILE. With it,
       the summary shows each resource as a card of the attributes that change, with
-      sensitive values masked. Without it, the summary lists addresses only.
+      sensitive values masked. Without it, the summary lists addresses only. A
+      missing file, or a file that is not terraform show -json output, writes a
+      warning and the comment posts without cards.
     default: ""
   max-plan-chars:
     description: >-

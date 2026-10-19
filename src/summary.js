@@ -309,6 +309,31 @@ function renderPlanComment(plan, { name, prefix, maxChars, heading, changes }) {
   return [`<!-- ${prefix}: ${name} -->`, ...(payload ? [payload] : []), `### ${heading || `Terraform plan: \`${name}\``}`, '', `${fence}terraform`, text, fence].join('\n');
 }
 
+// The changes in a plan-json file, or null when the file cannot give them. With
+// null, the summary reads the addresses from the plan text, so a bad file costs
+// the cards but not the plan comment.
+function readChanges(file, core) {
+  const warn = (message) => (core.warning ? core.warning(message) : core.info(message));
+  if (!fs.existsSync(file)) {
+    warn(`plan-json ${file} does not exist. The summary lists addresses only.`);
+    return null;
+  }
+  let plan;
+  try {
+    plan = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    warn(`plan-json ${file} is not JSON (${error.message}). The summary lists addresses only.`);
+    return null;
+  }
+  // terraform show -json writes format_version for every plan. Without it, the
+  // file is not a plan, such as the {} a workflow writes when the plan failed.
+  if (!plan || typeof plan !== 'object' || !plan.format_version) {
+    warn(`plan-json ${file} is not the output of terraform show -json. The summary lists addresses only.`);
+    return null;
+  }
+  return planChanges(plan);
+}
+
 const MODES = ['summary', 'pending', 'comment'];
 const NAME = /^[^\s>]+$/;
 
@@ -339,11 +364,7 @@ async function main({ github, context, core, inputs }) {
     }
     if (!inputs.planFile) throw new Error('"comment" mode needs plan-file.');
     if (!fs.existsSync(inputs.planFile)) throw new Error(`plan-file ${inputs.planFile} does not exist.`);
-    let changes = null;
-    if (inputs.planJson) {
-      if (!fs.existsSync(inputs.planJson)) throw new Error(`plan-json ${inputs.planJson} does not exist.`);
-      changes = planChanges(JSON.parse(fs.readFileSync(inputs.planJson, 'utf8')));
-    }
+    const changes = inputs.planJson ? readChanges(inputs.planJson, core) : null;
     planBody = renderPlanComment(fs.readFileSync(inputs.planFile, 'utf8'), {
       name: inputs.name,
       prefix,

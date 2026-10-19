@@ -149,7 +149,7 @@ test('comment mode stores the changes, and the summary shows them as cards', asy
   const planFile = path.join(dir, 'plan.txt');
   const planJson = path.join(dir, 'plan.json');
   fs.writeFileSync(planFile, '  # aws_iam_role.app will be updated in-place\nPlan: 0 to add, 1 to change, 0 to destroy.');
-  fs.writeFileSync(planJson, JSON.stringify({ resource_changes: [update('aws_iam_role.app', { name: 'app', max_session_duration: 3600 }, { name: 'app', max_session_duration: 7200 })] }));
+  fs.writeFileSync(planJson, JSON.stringify({ format_version: '1.2', resource_changes: [update('aws_iam_role.app', { name: 'app', max_session_duration: 3600 }, { name: 'app', max_session_duration: 7200 })] }));
 
   const comments = [];
   const github = {
@@ -178,4 +178,32 @@ test('comment mode stores the changes, and the summary shows them as cards', asy
 
   await s.main({ github, context, core, inputs: { mode: 'summary' } });
   assert.ok(comments[1].body.includes('🔧 <b>max_session_duration</b> <i>changed</i></th></tr><tr><td><code>7200</code><details><summary>before</summary><code>3600</code></details>'));
+});
+
+test('a plan-json that is missing or not a plan warns, and the comment still posts without cards', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tps-'));
+  const planFile = path.join(dir, 'plan.txt');
+  fs.writeFileSync(planFile, '  # aws_iam_role.app will be updated in-place\nPlan: 0 to add, 1 to change, 0 to destroy.');
+  const empty = path.join(dir, 'empty.json');
+  fs.writeFileSync(empty, '{}');
+  const broken = path.join(dir, 'broken.json');
+  fs.writeFileSync(broken, 'Terraform v1.10.3\n{"format_version"');
+
+  for (const planJson of [path.join(dir, 'missing.json'), empty, broken]) {
+    const comments = [];
+    const warnings = [];
+    const github = {
+      paginate: async () => comments,
+      rest: { issues: { listComments: () => {}, createComment: async ({ body }) => {
+        const data = { id: comments.length + 1, body, html_url: 'u' };
+        comments.push(data);
+        return { data };
+      } } },
+    };
+    const core = { setOutput: () => {}, info: () => {}, warning: (m) => warnings.push(m) };
+    await s.main({ github, context: { issue: { number: 1 }, repo: { owner: 'o', repo: 'r' } }, core, inputs: { mode: 'comment', name: 'prod', planFile, planJson } });
+    assert.equal(warnings.length, 1, planJson);
+    assert.doesNotMatch(comments[0].body, /tf-plan-changes/);
+    assert.deepEqual(s.parsePlan(comments[0].body, /<!-- tf-plan: ([^\s>]+) -->/).resources, [{ address: 'aws_iam_role.app', action: 'update' }]);
+  }
 });
