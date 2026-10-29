@@ -180,6 +180,23 @@ function diffList(before, after, { bs, as, au }, segs, raw, out) {
     const pairs = commonItems(before, after);
     const keptB = new Set(pairs.map(([i]) => i));
     const keptA = new Set(pairs.map(([, j]) => j));
+    // A value outside the run that is in both lists only changed place: it moved.
+    const waiting = new Map();
+    after.forEach((v, j) => {
+      if (keptA.has(j) || child(au, j) === true) return;
+      const k = JSON.stringify(v);
+      waiting.set(k, [...(waiting.get(k) || []), j]);
+    });
+    const moved = [];
+    before.forEach((v, i) => {
+      const spot = keptB.has(i) ? null : waiting.get(JSON.stringify(v));
+      if (!spot || !spot.length) return;
+      const j = spot.shift();
+      keptB.add(i);
+      keptA.add(j);
+      moved.push([j, scalar(v)]);
+    });
+    moved.sort(([a], [b]) => a - b).forEach(([, v]) => item(null, { raw, before: v, after: v, moved: true }));
     const removed = before.filter((v, i) => !keptB.has(i)).map((v) => scalar(v));
     const added = after.map((v, j) => (keptA.has(j) ? null : child(au, j) === true ? UNKNOWN : scalar(v))).filter((v) => v !== null);
     // As many values in as out reads as values replaced.
