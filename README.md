@@ -21,7 +21,7 @@ Each plan job posts its plan as a comment. The action can post it for you:
 
       - run: terraform show -json tfplan > plan.json
 
-      - uses: fizz/terraform-plan-summary@d6942bc1b2fd6c96c356106e991d393fcb277991 # v1.3.1
+      - uses: fizz/terraform-plan-summary@15ffcb39ce657b03f380014f3c6bddec0c7bcf73 # v1.3.2
         if: github.event_name == 'pull_request'
         with:
           mode: comment
@@ -48,7 +48,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: fizz/terraform-plan-summary@d6942bc1b2fd6c96c356106e991d393fcb277991 # v1.3.1
+      - uses: fizz/terraform-plan-summary@15ffcb39ce657b03f380014f3c6bddec0c7bcf73 # v1.3.2
         with:
           mode: pending
 
@@ -64,7 +64,7 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: fizz/terraform-plan-summary@d6942bc1b2fd6c96c356106e991d393fcb277991 # v1.3.1
+      - uses: fizz/terraform-plan-summary@15ffcb39ce657b03f380014f3c6bddec0c7bcf73 # v1.3.2
 ```
 
 `if: always()` is necessary. Without it, one failed plan skips the summary, and the failure is the row people most need to see.
