@@ -208,12 +208,13 @@ function cardOf(change) {
   const before = change.before !== null ? partsOf(change.before) : null;
   // A value added to or removed from a list is named by what it points at.
   const name = idKey || change.key || (after || before).name;
+  if (change.moved) return { type, name, state: 'moved', front: after.parts, back: null };
   if (after && before) return { type, name, state: 'changed', front: after.parts, back: before.parts };
   if (after) return { type, name, state: 'added', front: after.parts, back: null };
   return { type, name, state: 'removed', front: before.parts, back: null };
 }
 
-const STATE_ICONS = { added: '🆕', removed: '🗑️', changed: '🔧' };
+const STATE_ICONS = { added: '🆕', removed: '🗑️', changed: '🔧', moved: '↕️' };
 
 function renderChangeCard(change) {
   const card = cardOf(change);

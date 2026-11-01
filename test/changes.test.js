@@ -45,6 +45,22 @@ test('an env var added in the middle of the list is one added item, grouped unde
   ]);
 });
 
+test('a value that only moves in a plain list is moved, not removed and added', () => {
+  const before = { to: ['robin@x', 'gary@x', 'colby@x', 'heather@x', 'brian@x'] };
+  const after = { to: ['robin@x', 'heather@x', 'brian@x', 'colby@x', 'gary@x', 'ryder@x'] };
+  const [r] = c.planChanges({ resource_changes: [update('aws_ssm_document.report', before, after)] });
+  assert.deepEqual(r.changes, [
+    { group: 'to', key: null, before: '"colby@x"', after: '"colby@x"', moved: true },
+    { group: 'to', key: null, before: '"gary@x"', after: '"gary@x"', moved: true },
+    { group: 'to', key: null, before: null, after: '"ryder@x"' },
+  ]);
+});
+
+test('two values that swap places are both moved, not one changed into the other', () => {
+  const [r] = c.planChanges({ resource_changes: [update('aws_x.y', { to: ['a', 'b'] }, { to: ['b', 'a'] })] });
+  assert.deepEqual(r.changes, [{ group: 'to', key: null, before: '"a"', after: '"a"', moved: true }]);
+});
+
 test('a policy in jsonencode() compares what it says, by statement Sid', () => {
   const policy = (resources) => JSON.stringify({ Version: '2012-10-17', Statement: [{ Sid: 'SSMRead', Effect: 'Allow', Resource: resources }, { Sid: 'KMSDecrypt', Effect: 'Allow', Resource: '*' }] });
   const plan = { resource_changes: [update('aws_iam_role_policy.read', { policy: policy(['arn:a', 'arn:c']) }, { policy: policy(['arn:a', 'arn:b/ONBOARDING_URL', 'arn:c']) })] };
@@ -125,6 +141,14 @@ test('each change is a card with its type, its name, the new value in front and 
   ));
   assert.ok(row.includes('<sub>spec.template.spec.container.env</sub><br>🆕 <b>B_URL</b> <i>added</i></th></tr><tr><td>name: <code>B_URL</code><br>value_from.secret_key_ref.key: <code>B_URL</code></td>'));
   assert.ok(row.includes('<sub>spec</sub><br>🔧 <b>replicas</b> <i>changed</i></th></tr><tr><td><code>1</code><details><summary>before</summary><code>0</code></details>'));
+});
+
+test('a moved value is a card that says moved, with no before', () => {
+  const plan = { name: 'p', status: 'changes', headline: 'h', counts: { import: 0, add: 0, change: 1, destroy: 0 }, resources: [
+    { address: 'x.y', action: 'update', total: 1, changes: [{ group: 'to', key: null, before: '"gary@x"', after: '"gary@x"', moved: true }] },
+  ] };
+  const body = s.renderSummary([plan], { title: 'T', summaryMarker: '<!-- tf-plan-summary -->', maxResources: 5 });
+  assert.ok(body.includes('<sub>to</sub><br>↕️ <b>gary@x</b> <i>moved</i></th></tr><tr><td><code>gary@x</code></td>'));
 });
 
 test('an ARN in a list is a card named for what it points at, with its parts', () => {
