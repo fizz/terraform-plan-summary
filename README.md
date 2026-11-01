@@ -12,6 +12,8 @@ A pull request that plans three environments gets three long comments, and peopl
 
 ## Usage
 
+Pin the action to the commit of a release, as in the examples below. Each release is an exact version tag; no tag moves.
+
 Each plan job posts its plan as a comment. The action can post it for you:
 
 ```yaml
@@ -19,7 +21,7 @@ Each plan job posts its plan as a comment. The action can post it for you:
 
       - run: terraform show -json tfplan > plan.json
 
-      - uses: fizz/terraform-plan-summary@v1
+      - uses: fizz/terraform-plan-summary@15ffcb39ce657b03f380014f3c6bddec0c7bcf73 # v1.3.2
         if: github.event_name == 'pull_request'
         with:
           mode: comment
@@ -46,7 +48,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: fizz/terraform-plan-summary@v1
+      - uses: fizz/terraform-plan-summary@15ffcb39ce657b03f380014f3c6bddec0c7bcf73 # v1.3.2
         with:
           mode: pending
 
@@ -62,7 +64,7 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: fizz/terraform-plan-summary@v1
+      - uses: fizz/terraform-plan-summary@15ffcb39ce657b03f380014f3c6bddec0c7bcf73 # v1.3.2
 ```
 
 `if: always()` is necessary. Without it, one failed plan skips the summary, and the failure is the row people most need to see.
