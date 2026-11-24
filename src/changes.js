@@ -126,7 +126,8 @@ function diff(before, after, ctx, segs, raw, out) {
     return;
   }
   if (bs === true || as === true) {
-    if (!equal(before, after)) emit({ before: isEmpty(before) ? null : SENSITIVE, after: isEmpty(after) ? null : SENSITIVE });
+    // A write-only attribute is null in the plan and marked sensitive: nothing to show.
+    if (!(isEmpty(before) && isEmpty(after)) && !equal(before, after)) emit({ before: isEmpty(before) ? null : SENSITIVE, after: isEmpty(after) ? null : SENSITIVE });
     return;
   }
 
