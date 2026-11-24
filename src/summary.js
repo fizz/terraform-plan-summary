@@ -204,6 +204,12 @@ function cardOf(change) {
     return { type, name: change.key, state: 'changed', front: [['value', '(sensitive value changes)']], back: null };
   }
 
+  // A change with no value on either side has nothing to show. Comments written
+  // before the fix can still hold one.
+  if (change.before === null && change.after === null) {
+    return { type, name: change.key || 'value', state: 'changed', front: [['value', 'null']], back: null };
+  }
+
   const after = change.after !== null ? partsOf(change.after) : null;
   const before = change.before !== null ? partsOf(change.before) : null;
   // A value added to or removed from a list is named by what it points at.

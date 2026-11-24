@@ -231,3 +231,72 @@ test('a plan-json that is missing or not a plan warns, and the comment still pos
     assert.deepEqual(s.parsePlan(comments[0].body, /<!-- tf-plan: ([^\s>]+) -->/).resources, [{ address: 'aws_iam_role.app', action: 'update' }]);
   }
 });
+
+// value_wo is a write-only attribute: always null in plan JSON, and marked sensitive.
+function createWithWriteOnly() {
+  return {
+    address: 'aws_ssm_parameter.session_refresh_key',
+    type: 'aws_ssm_parameter',
+    mode: 'managed',
+    change: {
+      actions: ['create'],
+      before: null,
+      after: { name: '/app/session_refresh_key', type: 'SecureString', value_wo: null, value_wo_version: 1 },
+      after_unknown: { arn: true, id: true },
+      before_sensitive: false,
+      after_sensitive: { value_wo: true },
+    },
+  };
+}
+
+test('a write-only attribute that is null on both sides is not a change', () => {
+  const [r] = c.planChanges({ resource_changes: [createWithWriteOnly()] });
+  assert.ok(!r.changes.some((x) => x.key === 'value_wo'), JSON.stringify(r.changes));
+});
+
+test('a sensitive value that goes from null to a value is still a change', () => {
+  const [r] = c.planChanges({ resource_changes: [update('aws_ssm_parameter.k', { value: null }, { value: 'x' }, { after_sensitive: { value: true } })] });
+  assert.deepEqual(r.changes, [{ group: '', key: 'value', before: null, after: '(sensitive)' }]);
+});
+
+test('a change with null on both sides renders as a card instead of crashing', () => {
+  const resource = { address: 'aws_ssm_parameter.k', action: 'create', total: 1, changes: [{ group: '', key: 'value_wo', before: null, after: null }] };
+  const plan = { name: 'p', status: 'changes', headline: 'h', counts: { import: 0, add: 1, change: 0, destroy: 0 }, resources: [resource] };
+  const row = s.renderSummary([plan], { title: 'T', summaryMarker: '<!-- tf-plan-summary -->', maxResources: 5 }).split('\n')[5];
+  assert.ok(row.includes('<b>value_wo</b> <i>changed</i>'));
+});
+
+test('comment mode and summary survive a plan with a write-only attribute', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tps-'));
+  const planFile = path.join(dir, 'plan.txt');
+  const planJson = path.join(dir, 'plan.json');
+  fs.writeFileSync(planFile, '  # aws_ssm_parameter.session_refresh_key will be created\nPlan: 1 to add, 0 to change, 0 to destroy.');
+  fs.writeFileSync(planJson, JSON.stringify({ format_version: '1.2', resource_changes: [createWithWriteOnly()] }));
+
+  const comments = [];
+  const github = {
+    paginate: async () => comments,
+    rest: {
+      issues: {
+        listComments: () => {},
+        createComment: async ({ body }) => {
+          const data = { id: comments.length + 1, body, html_url: `https://x/${comments.length + 1}` };
+          comments.push(data);
+          return { data };
+        },
+        updateComment: async ({ comment_id, body }) => {
+          const data = comments.find((x) => x.id === comment_id);
+          data.body = body;
+          return { data };
+        },
+      },
+    },
+  };
+  const context = { issue: { number: 1 }, repo: { owner: 'o', repo: 'r' } };
+  const core = { setOutput: () => {}, info: () => {} };
+
+  await s.main({ github, context, core, inputs: { mode: 'comment', name: 'prod', planFile, planJson } });
+  await s.main({ github, context, core, inputs: { mode: 'summary' } });
+  assert.match(comments[1].body, /aws_ssm_parameter\.session_refresh_key/);
+  assert.doesNotMatch(comments[1].body, /value_wo<\/b>/);
+});
